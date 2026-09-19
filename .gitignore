@@ -2,3 +2,6 @@ node_modules/
 dist/
 target/
 .env
+
+# 本地流水线运行产物（二进制 / pid / 日志 / 交接记录）
+.pipeline/
