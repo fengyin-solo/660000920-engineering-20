@@ -1,20 +1,50 @@
 import { defineStore } from 'pinia';
-import { ref, computed } from 'vue';
+import { ref, computed, watch } from 'vue';
 import type { Device, Geofence, Alert, AlertType, AlertSeverity, DeviceGroup, DeviceThresholds, TrackData, TrackPoint, StayPoint, TrackSegment, HealthDataPoint, DeviceHealth, HealthSummary } from '../types';
 
 function generateId(prefix: string) {
   return prefix + Date.now() + Math.random().toString(36).slice(2, 6);
 }
 
+/**
+ * 值班数据（设备/围栏/分组）与交接记录（告警及确认状态）持久化到 localStorage。
+ * 刷新页面或重启本地流水线后自动恢复；播放位置等临时会话状态不持久化。
+ */
+const STORAGE_KEY = 'iot-duty-state-v1';
+const STORAGE_VERSION = 1;
+
+interface PersistedState {
+  version: number;
+  savedAt: string;
+  devices: Device[];
+  fences: Geofence[];
+  alerts: Alert[];
+  groups: DeviceGroup[];
+}
+
+function loadPersistedState(): Partial<PersistedState> | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedState;
+    if (!parsed || parsed.version !== STORAGE_VERSION) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+const persisted = loadPersistedState();
+
 export const useIotStore = defineStore('iot', () => {
-  const devices = ref<Device[]>([
+  const devices = ref<Device[]>(persisted?.devices ?? [
     { id: 'd1', name: '传感器-A01', lat: 39.9042, lng: 116.4074, status: 'online', lastSeen: new Date().toISOString(), battery: 85, temperature: 24.5 },
     { id: 'd2', name: '传感器-B02', lat: 39.9142, lng: 116.3974, status: 'alert', lastSeen: new Date().toISOString(), battery: 12, temperature: 38.2 },
     { id: 'd3', name: '追踪器-C03', lat: 39.8942, lng: 116.4174, status: 'offline', lastSeen: new Date(Date.now() - 3600000).toISOString(), battery: 0, temperature: 0 },
     { id: 'd4', name: '传感器-D04', lat: 39.9082, lng: 116.4024, status: 'online', lastSeen: new Date().toISOString(), battery: 45, temperature: 26.1 },
     { id: 'd5', name: '追踪器-E05', lat: 39.8992, lng: 116.4104, status: 'online', lastSeen: new Date().toISOString(), battery: 92, temperature: 23.8 },
   ]);
-  const fences = ref<Geofence[]>([
+  const fences = ref<Geofence[]>(persisted?.fences ?? [
     { id: 'f1', name: '办公区域', center: { lat: 39.9042, lng: 116.4074 }, radius: 500, type: 'circle', alertOnEnter: false, alertOnExit: true, color: '#4caf50' },
     { id: 'f2', name: '危险区域', center: { lat: 39.9142, lng: 116.3974 }, radius: 200, type: 'circle', alertOnEnter: true, alertOnExit: false, color: '#e53935' },
     { id: 'f3', name: '仓库区域', center: { lat: 39.8992, lng: 116.4124 }, radius: 0, type: 'polygon',
@@ -25,7 +55,7 @@ export const useIotStore = defineStore('iot', () => {
         { lat: 39.8972, lng: 116.4094 },
       ], alertOnEnter: true, alertOnExit: true, color: '#1976d2' },
   ]);
-  const alerts = ref<Alert[]>([
+  const alerts = ref<Alert[]>(persisted?.alerts ?? [
     {
       id: generateId('a'),
       deviceId: 'd2',
@@ -74,7 +104,7 @@ export const useIotStore = defineStore('iot', () => {
   const showBreachEvents = ref(true);
   const playbackInterval = ref<number | null>(null);
 
-  const groups = ref<DeviceGroup[]>([
+  const groups = ref<DeviceGroup[]>(persisted?.groups ?? [
     { id: 'g1', name: '生产车间', color: '#1976d2', description: '生产线设备' },
     { id: 'g2', name: '仓储区域', color: '#388e3c', description: '仓库监控设备' },
     { id: 'g3', name: '办公区域', color: '#f57c00', description: '办公环境监测' },
@@ -856,6 +886,33 @@ export const useIotStore = defineStore('iot', () => {
   function getDeviceHealth(deviceId: string): DeviceHealth | undefined {
     return deviceHealthList.value.find(h => h.deviceId === deviceId);
   }
+
+  // 持久化：合并写一次，防抖 300ms；页面隐藏/关闭前强制落盘
+  let persistTimer: number | null = null;
+  function persistNow() {
+    try {
+      const state: PersistedState = {
+        version: STORAGE_VERSION,
+        savedAt: new Date().toISOString(),
+        devices: devices.value,
+        fences: fences.value,
+        alerts: alerts.value,
+        groups: groups.value,
+      };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {
+      // 存储不可用（隐私模式/配额不足）时静默降级为内存模式，不影响当前值班
+    }
+  }
+  function schedulePersist() {
+    if (persistTimer !== null) window.clearTimeout(persistTimer);
+    persistTimer = window.setTimeout(persistNow, 300);
+  }
+  watch([devices, fences, alerts, groups], schedulePersist, { deep: true });
+  window.addEventListener('pagehide', persistNow);
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden') persistNow();
+  });
 
   return {
     devices, fences, alerts, selectedFenceId, editMode, highlightedDeviceId,

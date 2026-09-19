@@ -2,3 +2,6 @@ node_modules/
 dist/
 target/
 .env
+
+# 本地流水线运行时产物（PID/日志/编译产物）
+.run/

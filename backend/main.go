@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"github.com/gin-gonic/gin"
 )
 
@@ -35,6 +36,13 @@ func main() {
 		devices = append(devices, d)
 		c.JSON(http.StatusCreated, d)
 	})
-	fmt.Println("Server on :8080")
-	r.Run(":8080")
+	addr := ":" + os.Getenv("PORT")
+	if os.Getenv("PORT") == "" {
+		addr = ":8080"
+	}
+	fmt.Println("Server on " + addr)
+	if err := r.Run(addr); err != nil {
+		fmt.Fprintln(os.Stderr, "server failed:", err)
+		os.Exit(1)
+	}
 }
